@@ -1,11 +1,12 @@
 from ib_insync import IB, Stock
 import sqlite3
 from datetime import datetime, timedelta
+import pandas as pd
 
 # Define investment dates and symbols
 investment_data = [
     ("QMCO", "2025-02-12"),
-    ("ANAB", "2025-02-12"),
+    ("QMCO", "2025-02-12"),
     ("BSLK", "2025-02-13")
 ]
 
@@ -40,7 +41,7 @@ def fetch_relative_volume(symbol, date):
     )
 
     if not bars or len(bars_10d) < 10:
-        return None
+        return None, None, None
 
     # Extract volume data
     target_volume = bars[0].volume if bars else None
@@ -51,6 +52,28 @@ def fetch_relative_volume(symbol, date):
 
     return relative_volume, target_volume, avg_volume_10d
 
+def fetch_open_price(symbol, date):
+    contract = Stock(symbol, 'SMART', 'USD')
+    target_date = datetime.strptime(date, '%Y-%m-%d')
+
+    # Get historical data for the target date
+    bars = ib.reqHistoricalData(
+        contract,
+        endDateTime=target_date.strftime('%Y%m%d 23:59:59'),
+        durationStr='1 D',
+        barSizeSetting='1 day',
+        whatToShow='TRADES',
+        useRTH=True,
+        formatDate=1
+    )
+
+    if not bars:
+        return None
+
+    # Extract open price
+    open_price = bars[0].open if bars else None
+    return open_price
+
 def fetch_gap_and_changes(symbol, date):
     contract = Stock(symbol, 'SMART', 'USD')
     target_date = datetime.strptime(date, '%Y-%m-%d')
@@ -59,7 +82,7 @@ def fetch_gap_and_changes(symbol, date):
     bars_daily = ib.reqHistoricalData(
         contract,
         endDateTime=(target_date + timedelta(days=1)).strftime('%Y%m%d 23:59:59'),
-        durationStr='15 D',  # Fetch 15 days to ensure we cover at least 7 trading days
+        durationStr='15 D',
         barSizeSetting='1 day',
         whatToShow='TRADES',
         useRTH=True,
@@ -67,7 +90,7 @@ def fetch_gap_and_changes(symbol, date):
     )
 
     if not bars_daily or len(bars_daily) < 8:
-        return None
+        return None, None, None, None, None
 
     # Extract necessary prices for gap and change calculations
     yesterday_close = bars_daily[-3].close
@@ -89,42 +112,12 @@ def fetch_gap_and_changes(symbol, date):
     else:
         change_for_week = None
 
-    return gap_today, gap_tomorrow, change_from_open, change_for_week,today_open, today_close
-
-
-def fetch_atr_percentage(symbol, date):
-    contract = Stock(symbol, 'SMART', 'USD')
-    target_date = datetime.strptime(date, '%Y-%m-%d')
-
-    # Set end time to 3:40 PM EST (which is 20:40 UTC)
-    end_time_utc = target_date.strftime('%Y%m%d 20:40:00')
-
-    # Fetch 5-minute interval data ending at 3:40 PM EST
-    bars_5min = ib.reqHistoricalData(
-        contract,
-        endDateTime=end_time_utc,
-        durationStr='2 H',  # Fetch 2 hours to ensure we get 14 bars
-        barSizeSetting='5 mins',
-        whatToShow='TRADES',
-        useRTH=True,
-        formatDate=1
-    )
-
-    if not bars_5min or len(bars_5min) < 14:
-        return None
-
-    # Calculate ATR over the last 14 bars before 3:40 PM
-    atr_values = [abs(bar.high - bar.low) for bar in bars_5min[-14:]]
-    atr_5min = sum(atr_values) / len(atr_values) if len(atr_values) == 14 else None
-
-    # Calculate ATR%
-    atr_percentage = (atr_5min / bars_5min[-1].close) * 100 if atr_5min else None
-
-    return round(atr_percentage, 2) if atr_percentage else None
+    return gap_today, gap_tomorrow, change_from_open, change_for_week, today_close
 
 def fetch_data(symbol, date):
     relative_volume, target_volume, avg_volume_10d = fetch_relative_volume(symbol, date)
-    gap_today, gap_tomorrow, change_from_open, change_for_week,open_price, close_price = fetch_gap_and_changes(symbol, date)
+    open_price = fetch_open_price(symbol, date)
+    gap_today, gap_tomorrow, change_from_open, change_for_week, close_price = fetch_gap_and_changes(symbol, date)
 
     return {
         "Symbol": symbol,
@@ -143,8 +136,6 @@ def fetch_data(symbol, date):
 # Fetch data for all investments
 historical_data = [fetch_data(symbol, date) for symbol, date in investment_data]
 historical_data = [data for data in historical_data if data is not None]
-
-ib.disconnect()
 
 # Save to SQL database
 conn = sqlite3.connect("historical_data.db")
