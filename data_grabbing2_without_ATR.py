@@ -5,10 +5,18 @@ import pandas as pd
 
 # Define investment dates and symbols
 investment_data = [
-    ("QMCO", "2025-02-12"),
-    ("QMCO", "2025-02-12"),
-    ("BSLK", "2025-02-13")
+    ("TPIC", "2024-12-20"),
+    ("NVNI", "2024-12-19"),
+    ("NVNI", "2024-12-20"),
+    ("NVNI", "2024-12-23"),
+    ("NVNI", "2024-12-16"),
+    ("FRSX", "2024-12-20"),
+    ("BIOA", "2024-12-20"),
+    ("OPTX", "2024-12-20"),
+    ("RCAT", "2024-12-20")
 ]
+
+
 
 # Connect to IB Gateway
 ib = IB()
@@ -74,14 +82,20 @@ def fetch_open_price(symbol, date):
     open_price = bars[0].open if bars else None
     return open_price
 
-def fetch_gap_and_changes(symbol, date):
+def fetch_gap_and_changes(symbol, target_date):  # target_date is ALREADY a datetime object
     contract = Stock(symbol, 'SMART', 'USD')
-    target_date = datetime.strptime(date, '%Y-%m-%d')
 
-    # Get historical bars
+    yesterday = target_date - timedelta(days=1)
+    while yesterday.weekday() > 4:  # Skip weekends
+        yesterday -= timedelta(days=1)
+
+    next_trading_day = target_date + timedelta(days=1)
+    while next_trading_day.weekday() > 4:  # Skip weekends
+        next_trading_day += timedelta(days=1)
+
     bars_daily = ib.reqHistoricalData(
         contract,
-        endDateTime=(target_date + timedelta(days=1)).strftime('%Y%m%d 23:59:59'),
+        endDateTime=(next_trading_day + timedelta(days=1)).strftime('%Y%m%d 23:59:59'),
         durationStr='15 D',
         barSizeSetting='1 day',
         whatToShow='TRADES',
@@ -92,36 +106,46 @@ def fetch_gap_and_changes(symbol, date):
     if not bars_daily or len(bars_daily) < 8:
         return None, None, None, None, None
 
-    # Extract necessary prices for gap and change calculations
-    yesterday_close = bars_daily[-3].close
-    today_open = bars_daily[-2].open
-    today_close = bars_daily[-2].close
-    tomorrow_open = bars_daily[-1].open
+    yesterday_bar = next((bar for bar in bars_daily if bar.date == yesterday.date()), None)
+    today_bar = next((bar for bar in bars_daily if bar.date == target_date.date()), None)
+    next_day_bar = next((bar for bar in bars_daily if bar.date == next_trading_day.date()), None)
 
-    # Calculate gap percentages
+    if not yesterday_bar or not today_bar:
+        return None, None, None, None, None
+
+    yesterday_close = yesterday_bar.close
+    today_open = today_bar.open
+    today_close = today_bar.close
+
+    if next_day_bar:
+        tomorrow_open = next_day_bar.open
+        gap_tomorrow = round(((tomorrow_open - today_close) / today_close) * 100, 2)
+    else:
+        gap_tomorrow = None
+
     gap_today = round(((today_open - yesterday_close) / yesterday_close) * 100, 2)
-    gap_tomorrow = round(((tomorrow_open - today_close) / today_close) * 100, 2)
-
-    # Calculate change percentages
     change_from_open = round(((today_close - today_open) / today_open) * 100, 2)
 
-    # Calculate change for week
     if len(bars_daily) >= 8:
-        week_ago_close = bars_daily[-8].close  # Close price from 7 trading days ago
+        week_ago_close = bars_daily[-8].close
         change_for_week = round(((today_close - week_ago_close) / week_ago_close) * 100, 2)
     else:
         change_for_week = None
 
     return gap_today, gap_tomorrow, change_from_open, change_for_week, today_close
 
-def fetch_data(symbol, date):
-    relative_volume, target_volume, avg_volume_10d = fetch_relative_volume(symbol, date)
-    open_price = fetch_open_price(symbol, date)
-    gap_today, gap_tomorrow, change_from_open, change_for_week, close_price = fetch_gap_and_changes(symbol, date)
+
+def fetch_data(symbol, date_str):
+    target_date = datetime.strptime(date_str, '%Y-%m-%d')  # Convert date_str to datetime object
+    relative_volume, target_volume, avg_volume_10d = fetch_relative_volume(symbol, date_str)
+    open_price = fetch_open_price(symbol, date_str)
+
+    # Pass the correct datetime object
+    gap_today, gap_tomorrow, change_from_open, change_for_week, close_price = fetch_gap_and_changes(symbol, target_date)
 
     return {
         "Symbol": symbol,
-        "Date": date,
+        "Date": date_str,
         "Open Price": open_price,
         "Close Price": close_price,
         "Relative Volume": relative_volume,
